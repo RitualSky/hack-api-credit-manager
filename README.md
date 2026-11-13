@@ -49,7 +49,8 @@ entrega `coverage/lcov.info` a SonarCloud.
 
 ## Pruebas de performance (k6)
 El job `performance` ejecuta [tests/performance/load.js](tests/performance/load.js)
-contra `CERT_URL`: carga corta (~20 s, hasta 5 usuarios virtuales) sobre
+contra `CERT_URL` (o, si no está definido, contra la API levantada en el runner):
+carga corta (30 s, hasta 5 usuarios virtuales) sobre
 `GET /api/v1/hello` con umbrales de errores < 1 % y p95 < 800 ms. El resumen se
 publica como artefacto `k6-summary`. Para correrlo en local:
 ```
