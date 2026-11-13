@@ -14,6 +14,14 @@ mvn package          # genera target/quarkus-app/quarkus-run.jar
 java -jar target/quarkus-app/quarkus-run.jar
 ```
 
+## SonarCloud
+El job de SonarCloud requiere el secreto de Actions `SONAR_TOKEN`, con permiso
+para analizar el proyecto. Por defecto utiliza la organización `ritualsky` y la
+clave de proyecto `RitualSky_hack-api-credit-manager`. El proyecto debe existir
+en SonarCloud; si sus identificadores son distintos, configura las variables de
+Actions `SONAR_ORGANIZATION` y `SONAR_PROJECT_KEY` para sobrescribir estos valores.
+El análisis mantiene la validación del quality gate.
+
 ## Endpoints
 | Ruta | Descripción |
 |------|-------------|
