@@ -98,7 +98,7 @@ async function createParent() {
     }),
   });
   writeOutput("issue_key", issue.key);
-  await transition(issue.key, "In Progress");
+  await transition(issue.key, "En curso");
   console.log(`Created Jira parent issue ${issue.key}`);
 }
 
@@ -129,7 +129,7 @@ async function startSubtask() {
     }),
   });
   writeOutput("issue_key", issue.key);
-  await transition(issue.key, "In Progress");
+  await transition(issue.key, "En curso");
   console.log(`Created Jira sub-task ${issue.key} for ${jobName}`);
 }
 
@@ -151,7 +151,7 @@ async function finishSubtask() {
   const succeeded = result === "success";
   const label = succeeded ? "Exitoso" : result === "cancelled" ? "Cancelado" : "Fallido";
   await addResultComment(issueKey, label, process.env.RUN_URL);
-  await transition(issueKey, succeeded ? "Done" : "Failed");
+  await transition(issueKey, succeeded ? "Finalizado" : "Fallido");
 }
 
 async function finishParent() {
@@ -169,7 +169,7 @@ async function finishParent() {
     process.env.RUN_URL,
     failedJobs.length ? [`Jobs con errores: ${failedJobs.join(", ")}`] : [],
   );
-  await transition(issueKey, succeeded ? "Done" : "Failed");
+  await transition(issueKey, succeeded ? "Finalizado" : "Fallido");
 }
 
 async function main() {
