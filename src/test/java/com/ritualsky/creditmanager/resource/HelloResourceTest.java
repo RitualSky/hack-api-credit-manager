@@ -22,4 +22,18 @@ class HelloResourceTest {
                 .then().statusCode(200)
                 .body("message", is("Hello Hack, Quarkus!"));
     }
+
+    @Test
+    void helloDefaultsToWorldForBlankName() {
+        given().queryParam("name", "   ").when().get("/api/v1/hello")
+                .then().statusCode(200)
+                .body("message", is("Hello Hack, World!"));
+    }
+
+    @Test
+    void helloTrimsName() {
+        given().queryParam("name", "  Quarkus  ").when().get("/api/v1/hello")
+                .then().statusCode(200)
+                .body("message", is("Hello Hack, Quarkus!"));
+    }
 }

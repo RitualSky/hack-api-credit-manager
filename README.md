@@ -21,6 +21,9 @@ clave de proyecto `RitualSky_hack-api-credit-manager`. El proyecto debe existir
 en SonarCloud; si sus identificadores son distintos, configura las variables de
 Actions `SONAR_ORGANIZATION` y `SONAR_PROJECT_KEY` para sobrescribir estos valores.
 El análisis mantiene la validación del quality gate.
+`mvn verify` genera la cobertura con `quarkus-jacoco` en
+`target/jacoco-report/jacoco.xml`; el POM configura esta ruta para que SonarCloud
+importe el informe tanto en pull requests como en análisis de `master`.
 
 ## Endpoints
 | Ruta | Descripción |
