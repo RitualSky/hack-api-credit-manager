@@ -13,13 +13,13 @@ class HelloResourceTest {
     void helloDefaultsToWorld() {
         given().when().get("/api/v1/hello")
                 .then().statusCode(200)
-                .body("message", is("Hello, World!"));
+                .body("message", is("Hello Hack, World!"));
     }
 
     @Test
     void helloUsesNameParam() {
         given().queryParam("name", "Quarkus").when().get("/api/v1/hello")
                 .then().statusCode(200)
-                .body("message", is("Hello, Quarkus!"));
+                .body("message", is("Hello Hack, Quarkus!"));
     }
 }

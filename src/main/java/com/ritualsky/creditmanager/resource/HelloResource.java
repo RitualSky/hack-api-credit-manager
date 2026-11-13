@@ -14,6 +14,6 @@ public class HelloResource {
     @GET
     public HelloResponse hello(@QueryParam("name") String name) {
         String target = (name == null || name.isBlank()) ? "World" : name.trim();
-        return new HelloResponse("Hello, " + target + "!");
+        return new HelloResponse("Hello Hack, " + target + "!");
     }
 }
