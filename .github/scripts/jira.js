@@ -96,6 +96,10 @@ function adf(lines) {
   };
 }
 
+function sanitizeForLog(value) {
+  return String(value).replaceAll(/\p{Cc}+/gu, " ");
+}
+
 function writeOutput(name, value, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) throw new Error("GITHUB_OUTPUT is unavailable");
   fs.appendFileSync(outputPath, `${name}=${value}\n`);
@@ -155,7 +159,7 @@ async function createParent(config, env = process.env) {
   );
   writeOutput("issue_key", issue.key, env.GITHUB_OUTPUT);
   await transition(issue.key, "En curso", config);
-  console.log(`Created Jira parent issue ${issue.key}`);
+  console.log(`Created Jira parent issue ${sanitizeForLog(issue.key)}`);
 }
 
 async function startSubtask(config, env = process.env) {
@@ -195,7 +199,9 @@ async function startSubtask(config, env = process.env) {
   );
   writeOutput("issue_key", issue.key, env.GITHUB_OUTPUT);
   await transition(issue.key, "En curso", config);
-  console.log(`Created Jira sub-task ${issue.key} for ${jobName}`);
+  console.log(
+    `Created Jira sub-task ${sanitizeForLog(issue.key)} for ${sanitizeForLog(jobName)}`,
+  );
 }
 
 async function addResultComment(issueKey, result, runUrl, details, config) {
@@ -273,7 +279,7 @@ async function main(command = process.argv[2], env = process.env) {
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(error.message);
+    console.error(sanitizeForLog(error.message));
     process.exitCode = 1;
   });
 }
@@ -287,6 +293,7 @@ module.exports = {
   jira,
   main,
   requireConfig,
+  sanitizeForLog,
   startSubtask,
   transition,
   writeOutput,

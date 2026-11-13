@@ -47,6 +47,15 @@ npm run test:jira
 El comando exige 100% de cobertura en líneas, funciones y ramas. El pipeline
 entrega `coverage/lcov.info` a SonarCloud.
 
+## Pruebas de performance (k6)
+El job `performance` ejecuta [tests/performance/load.js](tests/performance/load.js)
+contra `CERT_URL`: carga corta (~20 s, hasta 5 usuarios virtuales) sobre
+`GET /api/v1/hello` con umbrales de errores < 1 % y p95 < 800 ms. El resumen se
+publica como artefacto `k6-summary`. Para correrlo en local:
+```
+k6 run -e BASE_URL=http://localhost:8080 tests/performance/load.js
+```
+
 ## Endpoints
 | Ruta | Descripción |
 |------|-------------|

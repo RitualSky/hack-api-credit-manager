@@ -105,7 +105,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
       - name: Instalar dependencias de pruebas JavaScript
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Pruebas Jira con cobertura total
         run: npm run test:jira
       - uses: actions/upload-artifact@v4
@@ -174,6 +174,8 @@ jobs:
           -Dsonar.organization="$SONAR_ORGANIZATION"
           -Dsonar.projectKey="$SONAR_PROJECT_KEY"
           -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+          -Dsonar.exclusions="**/*.test.js"
+          -Dsonar.coverage.exclusions="**/*.test.js"
           -Dsonar.qualitygate.wait=true
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''

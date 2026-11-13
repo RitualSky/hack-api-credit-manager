@@ -10,6 +10,7 @@ const {
   jira,
   main,
   requireConfig,
+  sanitizeForLog,
   startSubtask,
   transition,
   writeOutput,
@@ -297,6 +298,11 @@ test("skips Jira for forked PRs and rejects unknown commands", async () => {
   await main("create-parent", { JIRA_TRACKING_DISABLED: "true", GITHUB_OUTPUT: output });
   assert.equal(fs.readFileSync(output, "utf8"), "issue_key=\n");
   await assert.rejects(main("unknown"), /Unsupported Jira command/);
+});
+
+test("removes control characters from logged values", () => {
+  assert.equal(sanitizeForLog("SCRUM-1\r\nforged line\t!"), "SCRUM-1 forged line !");
+  assert.equal(sanitizeForLog(undefined), "undefined");
 });
 
 test("handles the executable entrypoint error path", () => {
