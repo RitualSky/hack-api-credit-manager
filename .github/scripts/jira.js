@@ -1,35 +1,67 @@
 const fs = require("node:fs");
 
-const baseUrl = process.env.JIRA_BASE_URL?.replace(/\/+$/, "");
-const email = process.env.JIRA_EMAIL;
-const apiToken = process.env.JIRA_API_TOKEN;
-const projectKey = process.env.JIRA_PROJECT_KEY;
+const REQUEST_TIMEOUT_MS = 30_000;
+const JIRA_API_BASE_URL =
+  "https://gianfrancocarrasco1901.atlassian.net/rest/api/3/";
 
-function requireConfig() {
+function requireConfig(env = process.env) {
   const missing = [];
-  if (!baseUrl) missing.push("JIRA_BASE_URL");
-  if (!email) missing.push("JIRA_EMAIL");
-  if (!apiToken) missing.push("JIRA_API_TOKEN");
-  if (!projectKey) missing.push("JIRA_PROJECT_KEY");
+  if (!env.JIRA_EMAIL) missing.push("JIRA_EMAIL");
+  if (!env.JIRA_API_TOKEN) missing.push("JIRA_API_TOKEN");
+  if (!env.JIRA_PROJECT_KEY) missing.push("JIRA_PROJECT_KEY");
   if (missing.length) {
     throw new Error(`Missing Jira configuration: ${missing.join(", ")}`);
   }
+
+  return {
+    apiBaseUrl: new URL(JIRA_API_BASE_URL),
+    email: env.JIRA_EMAIL,
+    apiToken: env.JIRA_API_TOKEN,
+    projectKey: env.JIRA_PROJECT_KEY,
+  };
 }
 
-async function jira(path, options = {}) {
-  const response = await fetch(`${baseUrl}/rest/api/3${path}`, {
-    signal: AbortSignal.timeout(30_000),
+function buildApiUrl(path, apiBaseUrl) {
+  if (typeof path !== "string" || path.length === 0) {
+    throw new Error("Jira API path must be a non-empty string");
+  }
+
+  const route = path.startsWith("/") ? path.slice(1) : path;
+  if (route.startsWith("/") || route.includes("\\")) {
+    throw new Error("Invalid Jira API path");
+  }
+
+  const requestUrl = new URL(route, apiBaseUrl);
+  const isTrustedRequest =
+    requestUrl.origin === apiBaseUrl.origin &&
+    requestUrl.pathname.startsWith(apiBaseUrl.pathname);
+  if (!isTrustedRequest) throw new Error("Jira API URL is outside the configured API origin");
+
+  return requestUrl;
+}
+
+async function jira(path, options = {}, config = requireConfig()) {
+  const requestUrl = buildApiUrl(path, config.apiBaseUrl);
+  const authorization =
+    "Basic " + Buffer.from(config.email + ":" + config.apiToken).toString("base64");
+  const headers = {
+    ...options.headers,
+    Authorization: authorization,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  };
+  const response = await fetch(requestUrl, {
     ...options,
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${email}:${apiToken}`).toString("base64")}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    redirect: "error",
+    headers,
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`Jira API ${options.method || "GET"} ${path} failed (${response.status}): ${body}`);
+    const method = options.method || "GET";
+    throw new Error(
+      `Jira API ${method} ${requestUrl.pathname} failed (${response.status}): ${body}`,
+    );
   }
   return body ? JSON.parse(body) : {};
 }
@@ -39,32 +71,47 @@ function adf(lines) {
     type: "doc",
     version: 1,
     content: lines.map((line) => {
-      const match = line.match(/^(.*?)(https?:\/\/\S+)$/);
-      const content = match
-        ? [
-            ...(match[1] ? [{ type: "text", text: match[1] }] : []),
-            {
-              type: "text",
-              text: match[2],
-              marks: [{ type: "link", attrs: { href: match[2] } }],
-            },
-          ]
-        : [{ type: "text", text: line }];
+      const httpsIndex = line.indexOf("https://");
+      const httpIndex = line.indexOf("http://");
+      let linkIndex = httpsIndex;
+      if (linkIndex === -1 || (httpIndex !== -1 && httpIndex < linkIndex)) {
+        linkIndex = httpIndex;
+      }
+
+      if (linkIndex === -1) {
+        return { type: "paragraph", content: [{ type: "text", text: line }] };
+      }
+
+      const prefix = line.slice(0, linkIndex);
+      const url = line.slice(linkIndex);
+      const content = [];
+      if (prefix) content.push({ type: "text", text: prefix });
+      content.push({
+        type: "text",
+        text: url,
+        marks: [{ type: "link", attrs: { href: url } }],
+      });
       return { type: "paragraph", content };
     }),
   };
 }
 
-function writeOutput(name, value) {
-  if (!process.env.GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT is unavailable");
-  fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+function writeOutput(name, value, outputPath = process.env.GITHUB_OUTPUT) {
+  if (!outputPath) throw new Error("GITHUB_OUTPUT is unavailable");
+  fs.appendFileSync(outputPath, `${name}=${value}\n`);
 }
 
-async function transition(issueKey, targetStatus) {
-  const issue = await jira(`/issue/${encodeURIComponent(issueKey)}?fields=status`);
-  if (issue.fields.status.name.toLowerCase() === targetStatus.toLowerCase()) return;
+async function transition(issueKey, targetStatus, config) {
+  const encodedIssueKey = encodeURIComponent(issueKey);
+  const issue = await jira(`/issue/${encodedIssueKey}?fields=status`, {}, config);
+  const currentStatus = issue.fields.status.name;
+  if (currentStatus.toLowerCase() === targetStatus.toLowerCase()) return;
 
-  const { transitions } = await jira(`/issue/${encodeURIComponent(issueKey)}/transitions`);
+  const { transitions } = await jira(
+    `/issue/${encodedIssueKey}/transitions`,
+    {},
+    config,
+  );
   const match = transitions.find(
     (item) => item.to.name.toLowerCase() === targetStatus.toLowerCase(),
   );
@@ -72,137 +119,175 @@ async function transition(issueKey, targetStatus) {
     throw new Error(`No Jira transition to "${targetStatus}" is available for ${issueKey}`);
   }
 
-  await jira(`/issue/${encodeURIComponent(issueKey)}/transitions`, {
-    method: "POST",
-    body: JSON.stringify({ transition: { id: match.id } }),
-  });
+  await jira(
+    `/issue/${encodedIssueKey}/transitions`,
+    {
+      method: "POST",
+      body: JSON.stringify({ transition: { id: match.id } }),
+    },
+    config,
+  );
 }
 
-async function createParent() {
-  const runUrl = process.env.RUN_URL;
-  const branch = process.env.GITHUB_REF_NAME || "unknown";
-  const runId = process.env.GITHUB_RUN_ID || "unknown";
-  const issue = await jira("/issue", {
-    method: "POST",
-    body: JSON.stringify({
-      fields: {
-        project: { key: projectKey },
-        issuetype: { name: "Tarea" },
-        summary: `GitHub Actions ${process.env.GITHUB_WORKFLOW || "pipeline"} #${runId}`,
-        description: adf([
-          `Workflow: ${process.env.GITHUB_WORKFLOW || "pipeline"}`,
-          `Branch: ${branch}`,
-          `Run: ${runUrl}`,
-        ]),
-      },
-    }),
-  });
-  writeOutput("issue_key", issue.key);
-  await transition(issue.key, "En curso");
+async function createParent(config, env = process.env) {
+  const runUrl = env.RUN_URL;
+  const branch = env.GITHUB_REF_NAME || "unknown";
+  const runId = env.GITHUB_RUN_ID || "unknown";
+  const workflow = env.GITHUB_WORKFLOW || "pipeline";
+  const issue = await jira(
+    "/issue",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        fields: {
+          project: { key: config.projectKey },
+          issuetype: { name: "Tarea" },
+          summary: `GitHub Actions ${workflow} #${runId}`,
+          description: adf([
+            `Workflow: ${workflow}`,
+            `Branch: ${branch}`,
+            `Run: ${runUrl}`,
+          ]),
+        },
+      }),
+    },
+    config,
+  );
+  writeOutput("issue_key", issue.key, env.GITHUB_OUTPUT);
+  await transition(issue.key, "En curso", config);
   console.log(`Created Jira parent issue ${issue.key}`);
 }
 
-async function startSubtask() {
-  const parentKey = process.env.JIRA_PARENT_KEY;
+async function startSubtask(config, env = process.env) {
+  const parentKey = env.JIRA_PARENT_KEY;
   if (!parentKey) throw new Error("JIRA_PARENT_KEY is unavailable");
 
-  const project = await jira(`/project/${encodeURIComponent(projectKey)}`);
-  const issueTypes = await jira(`/issuetype/project?projectId=${encodeURIComponent(project.id)}`);
+  const encodedProjectKey = encodeURIComponent(config.projectKey);
+  const project = await jira(`/project/${encodedProjectKey}`, {}, config);
+  const projectId = encodeURIComponent(project.id);
+  const issueTypes = await jira(`/issuetype/project?projectId=${projectId}`, {}, config);
   const subtaskType = issueTypes.find((type) => type.subtask);
-  if (!subtaskType) throw new Error(`No sub-task issue type is configured for ${projectKey}`);
+  if (!subtaskType) {
+    throw new Error(`No sub-task issue type is configured for ${config.projectKey}`);
+  }
 
-  const jobName = process.env.JIRA_JOB_NAME;
-  const runUrl = process.env.RUN_URL;
-  const issue = await jira("/issue", {
-    method: "POST",
-    body: JSON.stringify({
-      fields: {
-        project: { key: projectKey },
-        parent: { key: parentKey },
-        issuetype: { id: subtaskType.id },
-        summary: `${jobName}: ${process.env.GITHUB_WORKFLOW || "pipeline"}`,
-        description: adf([
-          `Job: ${jobName}`,
-          `Workflow run: ${runUrl}`,
-        ]),
-      },
-    }),
-  });
-  writeOutput("issue_key", issue.key);
-  await transition(issue.key, "En curso");
+  const jobName = env.JIRA_JOB_NAME;
+  const runUrl = env.RUN_URL;
+  const workflow = env.GITHUB_WORKFLOW || "pipeline";
+  const issue = await jira(
+    "/issue",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        fields: {
+          project: { key: config.projectKey },
+          parent: { key: parentKey },
+          issuetype: { id: subtaskType.id },
+          summary: `${jobName}: ${workflow}`,
+          description: adf([
+            `Job: ${jobName}`,
+            `Workflow run: ${runUrl}`,
+          ]),
+        },
+      }),
+    },
+    config,
+  );
+  writeOutput("issue_key", issue.key, env.GITHUB_OUTPUT);
+  await transition(issue.key, "En curso", config);
   console.log(`Created Jira sub-task ${issue.key} for ${jobName}`);
 }
 
-async function addResultComment(issueKey, result, runUrl, details = []) {
+async function addResultComment(issueKey, result, runUrl, details, config) {
   const content = [
     `Resultado: ${result}`,
     ...details,
     `Logs: ${runUrl}`,
   ];
-  await jira(`/issue/${encodeURIComponent(issueKey)}/comment`, {
-    method: "POST",
-    body: JSON.stringify({ body: adf(content) }),
-  });
+  await jira(
+    `/issue/${encodeURIComponent(issueKey)}/comment`,
+    {
+      method: "POST",
+      body: JSON.stringify({ body: adf(content) }),
+    },
+    config,
+  );
 }
 
-async function finishSubtask() {
-  const issueKey = process.env.JIRA_ISSUE_KEY;
-  const result = process.env.JOB_RESULT;
+async function finishSubtask(config, env = process.env) {
+  const issueKey = env.JIRA_ISSUE_KEY;
+  const result = env.JOB_RESULT;
   const succeeded = result === "success";
-  const label = succeeded ? "Exitoso" : result === "cancelled" ? "Cancelado" : "Fallido";
-  await addResultComment(issueKey, label, process.env.RUN_URL);
-  await transition(issueKey, succeeded ? "Finalizado" : "Fallido");
+  let label = "Fallido";
+  if (succeeded) label = "Exitoso";
+  else if (result === "cancelled") label = "Cancelado";
+
+  await addResultComment(issueKey, label, env.RUN_URL, [], config);
+  await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
 }
 
-async function finishParent() {
-  const issueKey = process.env.JIRA_ISSUE_KEY;
-  const results = JSON.parse(process.env.JOB_RESULTS || "{}");
+async function finishParent(config, env = process.env) {
+  const issueKey = env.JIRA_ISSUE_KEY;
+  const results = JSON.parse(env.JOB_RESULTS || "{}");
   const failedJobs = Object.entries(results)
     .filter(([, job]) => job.result === "failure" || job.result === "cancelled")
     .map(([name, job]) => `${name}: ${job.result}`);
   const succeeded = failedJobs.length === 0;
   const label = succeeded ? "Exitoso" : "Fallido";
+  const details = failedJobs.length
+    ? [`Jobs con errores: ${failedJobs.join(", ")}`]
+    : [];
 
-  await addResultComment(
-    issueKey,
-    label,
-    process.env.RUN_URL,
-    failedJobs.length ? [`Jobs con errores: ${failedJobs.join(", ")}`] : [],
-  );
-  await transition(issueKey, succeeded ? "Finalizado" : "Fallido");
+  await addResultComment(issueKey, label, env.RUN_URL, details, config);
+  await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
 }
 
-async function main() {
-  const command = process.argv[2];
-  if (command === "create-parent" && process.env.JIRA_TRACKING_DISABLED === "true") {
-    writeOutput("issue_key", "");
+async function main(command = process.argv[2], env = process.env) {
+  if (command === "create-parent" && env.JIRA_TRACKING_DISABLED === "true") {
+    writeOutput("issue_key", "", env.GITHUB_OUTPUT);
     console.log("Jira tracking is unavailable for this forked pull request; continuing without Jira.");
     return;
   }
   if (command === "create-parent") {
-    requireConfig();
-    await createParent();
+    const config = requireConfig(env);
+    await createParent(config, env);
     return;
   }
   if (command === "start-subtask") {
-    requireConfig();
-    await startSubtask();
+    const config = requireConfig(env);
+    await startSubtask(config, env);
     return;
   }
   if (command === "finish-subtask") {
-    requireConfig();
-    await finishSubtask();
+    const config = requireConfig(env);
+    await finishSubtask(config, env);
     return;
   }
   if (command === "finish-parent") {
-    requireConfig();
-    await finishParent();
+    const config = requireConfig(env);
+    await finishParent(config, env);
     return;
   }
   throw new Error(`Unsupported Jira command: ${command}`);
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  adf,
+  buildApiUrl,
+  createParent,
+  finishParent,
+  finishSubtask,
+  jira,
+  main,
+  requireConfig,
+  startSubtask,
+  transition,
+  writeOutput,
+};
