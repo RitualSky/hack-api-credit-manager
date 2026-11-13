@@ -121,11 +121,17 @@ jobs:
           cache: maven
       - name: Test y cobertura
         run: mvn -B verify
+      - name: Reporte HTML de pruebas tras fallo
+        if: failure()
+        continue-on-error: true
+        run: mvn -B surefire-report:report-only
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-reports
-          path: target/surefire-reports
+          path: |
+            target/surefire-reports
+            target/reports/surefire.html
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
@@ -427,9 +433,29 @@ jobs:
           JIRA_JOB_NAME: Pruebas de performance k6
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
+      - uses: actions/setup-java@v4
+        if: env.CERT_URL == ''
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      # Sin CERT_URL (certificación no desplegada) se prueba la API levantada en el runner
+      - name: Iniciar API local
+        if: env.CERT_URL == ''
+        run: |
+          mvn -B -DskipTests package
+          nohup java -jar target/quarkus-app/quarkus-run.jar > app.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fs http://localhost:8080/api/v1/hello > /dev/null && exit 0
+            sleep 1
+          done
+          cat app.log
+          exit 1
       - uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1
       - name: Ejecutar k6
-        run: k6 run --summary-export=k6-summary.json -e BASE_URL="${{ env.CERT_URL }}" tests/performance/load.js
+        env:
+          BASE_URL: ${{ env.CERT_URL || 'http://localhost:8080' }}
+        run: k6 run --summary-export=k6-summary.json -e BASE_URL="$BASE_URL" tests/performance/load.js
       - uses: actions/upload-artifact@v4
         if: always()
         with:

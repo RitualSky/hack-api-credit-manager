@@ -3,11 +3,11 @@ import { check, sleep } from 'k6';
 
 const BASE_URL = (__ENV.BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
 
-// Prueba de carga corta (~20 s) pensada para demos
+// Prueba de carga corta (30 s) pensada para demos
 export const options = {
   stages: [
     { duration: '5s', target: 5 },
-    { duration: '10s', target: 5 },
+    { duration: '20s', target: 5 },
     { duration: '5s', target: 0 },
   ],
   thresholds: {
