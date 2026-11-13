@@ -87,7 +87,7 @@ async function createParent() {
     body: JSON.stringify({
       fields: {
         project: { key: projectKey },
-        issuetype: { name: "Task" },
+        issuetype: { name: "Tarea" },
         summary: `GitHub Actions ${process.env.GITHUB_WORKFLOW || "pipeline"} #${runId}`,
         description: adf([
           `Workflow: ${process.env.GITHUB_WORKFLOW || "pipeline"}`,
