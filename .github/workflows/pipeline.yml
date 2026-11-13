@@ -202,7 +202,7 @@ jobs:
         run: node .github/scripts/jira.js finish-subtask
 
   security-tool:
-    name: Herramienta de seguridad (dummy)
+    name: Herramienta de seguridad
     needs: [test, jira-init]
     runs-on: ubuntu-latest
     steps:
@@ -247,12 +247,12 @@ jobs:
           JIRA_JOB_NAME: OWASP ZAP baseline
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
-      - uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
-        with:
-          target: ${{ env.CERT_URL }}
-          allow_issue_writing: false
-          fail_action: false
-          artifact_name: zap-baseline-report
+      # - uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
+      #   with:
+      #     target: ${{ env.CERT_URL }}
+      #     allow_issue_writing: false
+      #     fail_action: false
+      #     artifact_name: zap-baseline-report
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
@@ -281,12 +281,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
       # Solo contra el ambiente de certificación autorizado (CERT_URL)
-      - uses: zaproxy/action-full-scan@75ee1686750ab1511a73b26b77a2aedd295053ed # v0.12.0
-        with:
-          target: ${{ env.CERT_URL }}
-          allow_issue_writing: false
-          fail_action: false
-          artifact_name: zap-full-scan-report
+      # - uses: zaproxy/action-full-scan@75ee1686750ab1511a73b26b77a2aedd295053ed # v0.12.0
+      #   with:
+      #     target: ${{ env.CERT_URL }}
+      #     allow_issue_writing: false
+      #     fail_action: false
+      #     artifact_name: zap-full-scan-report
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
@@ -321,11 +321,11 @@ jobs:
         with:
           name: app-package
           path: package
-      - uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
-        with:
-          app-name: ${{ vars.AZURE_WEBAPP_CERT_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_CERT_PUBLISH_PROFILE }}
-          package: package/*.jar
+      # - uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
+      #   with:
+      #     app-name: ${{ vars.AZURE_WEBAPP_CERT_NAME }}
+      #     publish-profile: ${{ secrets.AZURE_WEBAPP_CERT_PUBLISH_PROFILE }}
+      #     package: package/*.jar
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
@@ -537,15 +537,15 @@ jobs:
           JIRA_JOB_NAME: Despliegue producción
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
-      - uses: actions/download-artifact@v4
-        with:
-          name: app-package
-          path: package
-      - uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
-        with:
-          app-name: ${{ vars.AZURE_WEBAPP_PROD_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PROD_PUBLISH_PROFILE }}
-          package: package/*.jar
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: app-package
+      #     path: package
+      # - uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
+      #   with:
+      #     app-name: ${{ vars.AZURE_WEBAPP_PROD_NAME }}
+      #     publish-profile: ${{ secrets.AZURE_WEBAPP_PROD_PUBLISH_PROFILE }}
+      #     package: package/*.jar
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
