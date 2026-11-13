@@ -25,6 +25,40 @@ El análisis mantiene la validación del quality gate.
 `target/jacoco-report/jacoco.xml`; el POM configura esta ruta para que SonarCloud
 importe el informe tanto en pull requests como en análisis de `master`.
 
+## Jira en GitHub Actions
+Cada ejecución crea un issue `Tarea` en el proyecto `SCRUM`. Cada job ejecutado
+se registra como subtarea: pasa a `En curso` al iniciar y a `Finalizado` o
+`Fallido` al terminar. El resultado y el enlace a los logs quedan en un
+comentario de la subtarea; el issue padre se cierra según el resultado global
+del workflow.
+
+Configura en **Settings → Secrets and variables → Actions** los secretos
+`JIRA_EMAIL` (correo de la cuenta Jira) y `JIRA_API_TOKEN`. La cuenta necesita
+permisos para crear y actualizar issues, agregar comentarios y ejecutar
+transiciones en el proyecto. El URL de Jira y la clave del proyecto se definen
+en `.github/scripts/jira.js` y en el bloque `env` de `.github/workflows/pipeline.yml`,
+respectivamente. Los PRs
+desde forks continúan sin Jira porque GitHub no expone secretos a esos eventos.
+Usa una cuenta de servicio y un token limitados al proyecto; los workflows de PR
+del mismo repositorio sí reciben los secretos configurados.
+
+Para ejecutar los tests del cliente Jira y generar cobertura LCOV:
+```
+npm ci
+npm run test:jira
+```
+El comando exige 100% de cobertura en líneas, funciones y ramas. El pipeline
+entrega `coverage/lcov.info` a SonarCloud.
+
+## Pruebas de performance (k6)
+El job `performance` ejecuta [tests/performance/load.js](tests/performance/load.js)
+contra `CERT_URL`: carga corta (~20 s, hasta 5 usuarios virtuales) sobre
+`GET /api/v1/hello` con umbrales de errores < 1 % y p95 < 800 ms. El resumen se
+publica como artefacto `k6-summary`. Para correrlo en local:
+```
+k6 run -e BASE_URL=http://localhost:8080 tests/performance/load.js
+```
+
 ## Endpoints
 | Ruta | Descripción |
 |------|-------------|

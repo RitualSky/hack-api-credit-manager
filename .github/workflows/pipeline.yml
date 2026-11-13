@@ -27,13 +27,41 @@ concurrency:
 env:
   JAVA_VERSION: "21"
   CERT_URL: ${{ vars.CERT_URL }}
+  JIRA_PROJECT_KEY: SCRUM
 
 jobs:
+  jira-init:
+    name: Crear issue padre en Jira
+    runs-on: ubuntu-latest
+    outputs:
+      issue_key: ${{ steps.create.outputs.issue_key }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Crear issue padre
+        id: create
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_TRACKING_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && secrets.JIRA_EMAIL == '' && secrets.JIRA_API_TOKEN == '' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js create-parent
+
   build:
     name: Build
+    needs: jira-init
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Build
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -46,13 +74,46 @@ jobs:
           name: app-package
           path: target/*.jar
           if-no-files-found: error
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   test:
     name: Pruebas unitarias
-    needs: build
+    needs: [build, jira-init]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Pruebas unitarias
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
+      - name: Instalar dependencias de pruebas JavaScript
+        run: npm ci --ignore-scripts
+      - name: Pruebas Jira con cobertura total
+        run: npm run test:jira
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: javascript-coverage
+          path: coverage/lcov.info
+          if-no-files-found: warn
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -65,15 +126,38 @@ jobs:
         with:
           name: unit-test-reports
           path: target/surefire-reports
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   sonarcloud:
     name: SonarCloud
-    needs: test
+    needs: [test, jira-init]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: javascript-coverage
+          path: coverage
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: SonarCloud
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -89,71 +173,171 @@ jobs:
           -Dsonar.host.url=https://sonarcloud.io
           -Dsonar.organization="$SONAR_ORGANIZATION"
           -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+          -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+          -Dsonar.exclusions="**/*.test.js"
+          -Dsonar.coverage.exclusions="**/*.test.js"
           -Dsonar.qualitygate.wait=true
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   security-tool:
     name: Herramienta de seguridad (dummy)
-    needs: test
+    needs: [test, jira-init]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Herramienta de seguridad
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - name: Escaneo de seguridad (placeholder)
         run: echo "TODO - reemplazar por la herramienta de seguridad corporativa (SCA/SAST)."
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
-  # Desde aquí no se ejecuta en pull requests
+  # El PR ejecuta CI; los escaneos DAST se reservan para push o ejecución manual.
   owasp-zap:
     name: OWASP ZAP baseline
-    needs: [sonarcloud, security-tool]
-    if: github.event_name != 'pull_request'
+    needs: [sonarcloud, security-tool, jira-init]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: zaproxy/action-baseline@v0.14.0
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: OWASP ZAP baseline
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
+      - uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
         with:
           target: ${{ env.CERT_URL }}
           allow_issue_writing: false
           fail_action: false
           artifact_name: zap-baseline-report
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   dast:
     name: DAST (ethical hacking)
-    needs: [sonarcloud, security-tool]
-    if: github.event_name != 'pull_request'
+    needs: [sonarcloud, security-tool, jira-init]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: DAST
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       # Solo contra el ambiente de certificación autorizado (CERT_URL)
-      - uses: zaproxy/action-full-scan@v0.12.0
+      - uses: zaproxy/action-full-scan@75ee1686750ab1511a73b26b77a2aedd295053ed # v0.12.0
         with:
           target: ${{ env.CERT_URL }}
           allow_issue_writing: false
           fail_action: false
           artifact_name: zap-full-scan-report
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   deploy-cert:
     name: Despliegue Web App (certificación)
-    needs: [owasp-zap, dast]
+    needs: [owasp-zap, dast, jira-init]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment:
       name: certification
       url: ${{ vars.CERT_URL }}
     steps:
+      - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Despliegue certificación
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - uses: actions/download-artifact@v4
         with:
           name: app-package
           path: package
-      - uses: azure/webapps-deploy@v3
+      - uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
         with:
           app-name: ${{ vars.AZURE_WEBAPP_CERT_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_CERT_PUBLISH_PROFILE }}
           package: package/*.jar
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   functional-tests:
     name: Pruebas funcionales (Karate)
-    needs: deploy-cert
+    needs: [deploy-cert, jira-init]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Pruebas funcionales Karate
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -166,13 +350,33 @@ jobs:
         with:
           name: karate-reports
           path: target/karate-reports
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   functional-report:
     name: Reporte de pruebas funcionales
-    needs: functional-tests
+    needs: [functional-tests, jira-init]
     if: always() && needs.functional-tests.result != 'skipped'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Reporte funcional
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - name: Resumen
         run: |
           echo "## Reporte funcional (Karate)" >> "$GITHUB_STEP_SUMMARY"
@@ -183,14 +387,33 @@ jobs:
         run: |
           echo "Pruebas funcionales fallidas; se detiene el pipeline."
           exit 1
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   performance:
     name: Pruebas de performance (k6)
-    needs: functional-report
+    needs: [functional-report, jira-init]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: grafana/setup-k6-action@v1
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Pruebas de performance k6
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
+      - uses: grafana/setup-k6-action@c47136d33d365efbeb9ae7266908b5dcf98cdece # v1
       - name: Ejecutar k6
         run: k6 run --summary-export=k6-summary.json -e BASE_URL="${{ env.CERT_URL }}" tests/performance/load.js
       - uses: actions/upload-artifact@v4
@@ -198,15 +421,35 @@ jobs:
         with:
           name: k6-summary
           path: k6-summary.json
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   # Pase a producción: bajo riesgo => calendarizado automático; alto => aprobación humana
   release-scheduled:
     name: Pase automatizado calendarizado
-    needs: performance
+    needs: [performance, jira-init]
     if: github.event_name == 'workflow_dispatch' && inputs.change_risk == 'low'
     runs-on: ubuntu-latest
     environment: production-scheduled
     steps:
+      - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Pase automatizado calendarizado
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - name: Esperar fecha/hora programada
         env:
           SCHEDULED_AT: ${{ inputs.scheduled_at }}
@@ -218,20 +461,49 @@ jobs:
             exit 1
           fi
           if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   release-approval:
     name: Aprobación humana para producción
-    needs: performance
-    if: github.event_name != 'workflow_dispatch' || inputs.change_risk != 'low'
+    needs: [performance, jira-init]
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.change_risk != 'low')
     runs-on: ubuntu-latest
     # Configurar required reviewers en este environment
     environment: production-approval
     steps:
+      - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Aprobación humana para producción
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - run: echo "Aprobado por un revisor humano."
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
 
   deploy-prod:
     name: Despliegue Azure (producción)
-    needs: [release-scheduled, release-approval]
+    needs: [release-scheduled, release-approval, jira-init]
     if: >
       always() && !cancelled() &&
       (needs.release-scheduled.result == 'success' || needs.release-approval.result == 'success')
@@ -240,12 +512,62 @@ jobs:
       name: production
       url: ${{ vars.PROD_URL }}
     steps:
+      - uses: actions/checkout@v4
+      - name: Crear subtarea Jira
+        id: jira_subtask
+        if: needs.jira-init.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_PARENT_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JIRA_JOB_NAME: Despliegue producción
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js start-subtask
       - uses: actions/download-artifact@v4
         with:
           name: app-package
           path: package
-      - uses: azure/webapps-deploy@v3
+      - uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
         with:
           app-name: ${{ vars.AZURE_WEBAPP_PROD_NAME }}
           publish-profile: ${{ secrets.AZURE_WEBAPP_PROD_PUBLISH_PROFILE }}
           package: package/*.jar
+      - name: Registrar resultado en Jira
+        if: always() && steps.jira_subtask.outputs.issue_key != ''
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ steps.jira_subtask.outputs.issue_key }}
+          JOB_RESULT: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-subtask
+
+  jira-finalize:
+    name: Finalizar issue padre en Jira
+    needs:
+      - jira-init
+      - build
+      - test
+      - sonarcloud
+      - security-tool
+      - owasp-zap
+      - dast
+      - deploy-cert
+      - functional-tests
+      - functional-report
+      - performance
+      - release-scheduled
+      - release-approval
+      - deploy-prod
+    if: always() && needs.jira-init.result == 'success' && needs.jira-init.outputs.issue_key != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Registrar resultado final en Jira
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: ${{ needs.jira-init.outputs.issue_key }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node .github/scripts/jira.js finish-parent

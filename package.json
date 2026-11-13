@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "test:jira": "c8 --include .github/scripts/jira.js --reporter=text --reporter=lcov --check-coverage --lines 100 --functions 100 --branches 100 node --test .github/scripts/jira.test.js"
+  },
+  "overrides": {
+    "glob": "14.0.6",
+    "minimatch": "11.0.8"
+  },
+  "devDependencies": {
+    "c8": "12.0.0"
+  }
+}

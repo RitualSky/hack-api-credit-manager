@@ -8,3 +8,5 @@ target/
 .factorypath
 .quarkus/
 *.log
+node_modules/
+coverage/
