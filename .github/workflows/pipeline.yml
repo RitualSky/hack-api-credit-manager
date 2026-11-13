@@ -1,0 +1,249 @@
+name: CI/CD Azure
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      change_risk:
+        description: "Complejidad/impacto del cambio (low = pase automatizado calendarizado, high = aprobación humana)"
+        type: choice
+        options: [low, high]
+        default: high
+      scheduled_at:
+        description: "Solo si low: fecha/hora UTC del pase a producción (ej. 2026-11-14T02:00:00Z)"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JAVA_VERSION: "21"
+  CERT_URL: ${{ vars.CERT_URL }}
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Build
+        run: mvn -B -DskipTests package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-package
+          path: target/*.jar
+          if-no-files-found: error
+
+  test:
+    name: Pruebas unitarias
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Test y cobertura
+        run: mvn -B verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-reports
+          path: target/surefire-reports
+
+  sonarcloud:
+    name: SonarCloud
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Análisis SonarCloud
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: >
+          mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+          -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+          -Dsonar.qualitygate.wait=true
+
+  security-tool:
+    name: Herramienta de seguridad (dummy)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Escaneo de seguridad (placeholder)
+        run: echo "TODO - reemplazar por la herramienta de seguridad corporativa (SCA/SAST)."
+
+  # Desde aquí no se ejecuta en pull requests
+  owasp-zap:
+    name: OWASP ZAP baseline
+    needs: [sonarcloud, security-tool]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ env.CERT_URL }}
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: zap-baseline-report
+
+  dast:
+    name: DAST (ethical hacking)
+    needs: [sonarcloud, security-tool]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Solo contra el ambiente de certificación autorizado (CERT_URL)
+      - uses: zaproxy/action-full-scan@v0.12.0
+        with:
+          target: ${{ env.CERT_URL }}
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: zap-full-scan-report
+
+  deploy-cert:
+    name: Despliegue Web App (certificación)
+    needs: [owasp-zap, dast]
+    runs-on: ubuntu-latest
+    environment:
+      name: certification
+      url: ${{ vars.CERT_URL }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          path: package
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_CERT_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_CERT_PUBLISH_PROFILE }}
+          package: package/*.jar
+
+  functional-tests:
+    name: Pruebas funcionales (Karate)
+    needs: deploy-cert
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+      - name: Ejecutar Karate
+        run: mvn -B test -Pkarate -Dkarate.options="--tags @functional" -Dkarate.env=cert -DbaseUrl="${{ env.CERT_URL }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: karate-reports
+          path: target/karate-reports
+
+  functional-report:
+    name: Reporte de pruebas funcionales
+    needs: functional-tests
+    if: always() && needs.functional-tests.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resumen
+        run: |
+          echo "## Reporte funcional (Karate)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Resultado: ${{ needs.functional-tests.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Reporte HTML en el artefacto karate-reports." >> "$GITHUB_STEP_SUMMARY"
+      - name: Continuar solo si pasaron
+        if: needs.functional-tests.result != 'success'
+        run: |
+          echo "Pruebas funcionales fallidas; se detiene el pipeline."
+          exit 1
+
+  performance:
+    name: Pruebas de performance (k6)
+    needs: functional-report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: grafana/setup-k6-action@v1
+      - name: Ejecutar k6
+        run: k6 run --summary-export=k6-summary.json -e BASE_URL="${{ env.CERT_URL }}" tests/performance/load.js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: k6-summary
+          path: k6-summary.json
+
+  # Pase a producción: bajo riesgo => calendarizado automático; alto => aprobación humana
+  release-scheduled:
+    name: Pase automatizado calendarizado
+    needs: performance
+    if: github.event_name == 'workflow_dispatch' && inputs.change_risk == 'low'
+    runs-on: ubuntu-latest
+    environment: production-scheduled
+    steps:
+      - name: Esperar fecha/hora programada
+        env:
+          SCHEDULED_AT: ${{ inputs.scheduled_at }}
+        run: |
+          if [ -z "$SCHEDULED_AT" ]; then echo "Sin fecha: se ejecuta de inmediato."; exit 0; fi
+          wait=$(( $(date -u -d "$SCHEDULED_AT" +%s) - $(date -u +%s) ))
+          if [ "$wait" -gt 18000 ]; then
+            echo "::error::Máximo 5 h de espera en el runner. Para esperas mayores usa un wait timer en el environment production-scheduled."
+            exit 1
+          fi
+          if [ "$wait" -gt 0 ]; then sleep "$wait"; fi
+
+  release-approval:
+    name: Aprobación humana para producción
+    needs: performance
+    if: github.event_name != 'workflow_dispatch' || inputs.change_risk != 'low'
+    runs-on: ubuntu-latest
+    # Configurar required reviewers en este environment
+    environment: production-approval
+    steps:
+      - run: echo "Aprobado por un revisor humano."
+
+  deploy-prod:
+    name: Despliegue Azure (producción)
+    needs: [release-scheduled, release-approval]
+    if: >
+      always() && !cancelled() &&
+      (needs.release-scheduled.result == 'success' || needs.release-approval.result == 'success')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PROD_URL }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          path: package
+      - uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ vars.AZURE_WEBAPP_PROD_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PROD_PUBLISH_PROFILE }}
+          package: package/*.jar
