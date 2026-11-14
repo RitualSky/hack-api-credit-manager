@@ -6,24 +6,17 @@ const path = require("node:path");
 const { after, afterEach, test } = require("node:test");
 const {
   adf,
-  addParentIssuePullRequestComment,
   artifactNames,
   buildApiUrl,
   finishSubtask,
-  github,
-  githubApiUrl,
   jira,
   main,
-  pullRequestMarker,
-  pullRequestStageComment,
-  resolvePullRequestNumber,
   requireConfig,
   sanitizeForLog,
   startSubtask,
   subtaskResultLines,
   transition,
   updateSubtaskDescription,
-  upsertPullRequestComment,
   writeOutput,
 } = require("./jira");
 
@@ -73,18 +66,6 @@ function jiraEnv(overrides = {}) {
     GITHUB_WORKFLOW: "CI",
     GITHUB_REF_NAME: "feature/test",
     GITHUB_RUN_ID: "42",
-    RUN_URL: "https://github.com/acme/repo/actions/runs/42",
-    ...overrides,
-  };
-}
-
-function githubEnv(overrides = {}) {
-  return {
-    GITHUB_TOKEN: "github-test-token",
-    GITHUB_API_URL: "https://api.github.test",
-    GITHUB_REPOSITORY: "acme/repo",
-    GITHUB_RUN_ID: "42",
-    GITHUB_SHA: "abc123",
     RUN_URL: "https://github.com/acme/repo/actions/runs/42",
     ...overrides,
   };
@@ -170,111 +151,6 @@ test("creates linked ADF paragraphs with or without URL prefixes", () => {
   assert.equal(document.content[4].content[0].marks[0].attrs.href, "https://first.test then http://second.test");
 });
 
-test("resolves pull request numbers from event payloads and associated commits", async () => {
-  const eventPath = path.join(tempDir, "pull-request-event.json");
-  fs.writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 73 } }));
-  assert.equal(
-    await resolvePullRequestNumber(githubEnv({
-      GITHUB_EVENT_NAME: "pull_request",
-      GITHUB_EVENT_PATH: eventPath,
-    })),
-    "73",
-  );
-  assert.equal(await resolvePullRequestNumber(githubEnv({ PR_NUMBER: "74" })), "74");
-  assert.equal(await resolvePullRequestNumber({}), "");
-
-  fs.writeFileSync(eventPath, JSON.stringify({ pull_request: {} }));
-  assert.equal(
-    await resolvePullRequestNumber(githubEnv({
-      GITHUB_EVENT_NAME: "pull_request",
-      GITHUB_EVENT_PATH: eventPath,
-      GITHUB_SHA: "",
-    })),
-    "",
-  );
-
-  const calls = setFetch(({ url }) => {
-    assert.match(url.pathname, /\/repos\/acme\/repo\/commits\/abc123\/pulls$/);
-    return jsonResponse([
-      { number: 75, merged_at: null },
-      { number: 76, merged_at: "2026-11-14T03:00:00Z" },
-    ]);
-  });
-  assert.equal(await resolvePullRequestNumber(githubEnv()), "76");
-  assert.equal(calls.length, 1);
-
-  setFetch(() => jsonResponse([{ number: 77, merged_at: null }]));
-  assert.equal(await resolvePullRequestNumber(githubEnv()), "77");
-  setFetch(() => jsonResponse([]));
-  assert.equal(await resolvePullRequestNumber(githubEnv()), "");
-  assert.equal(await resolvePullRequestNumber(githubEnv({ GITHUB_TOKEN: "" })), "");
-});
-
-test("uses a bounded GitHub API URL and reports API failures", async () => {
-  assert.equal(
-    githubApiUrl("/repos/acme/repo", githubEnv()).href,
-    "https://api.github.test/repos/acme/repo",
-  );
-  assert.throws(
-    () => githubApiUrl("https://attacker.test/path", githubEnv()),
-    /outside the configured API origin/,
-  );
-  await assert.rejects(github("/repos/acme/repo", {}, {}), /GITHUB_TOKEN is unavailable/);
-
-  setFetch(() => new Response("denied", { status: 403 }));
-  await assert.rejects(
-    github("/repos/acme/repo", {}, githubEnv()),
-    /GitHub API GET .*failed \(403\): denied/,
-  );
-
-  assert.equal(githubApiUrl("/health", githubEnv({ GITHUB_API_URL: "" })).origin, "https://api.github.com");
-  setFetch(() => new Response(null, { status: 204 }));
-  assert.deepEqual(await github("/health", {}, githubEnv()), {});
-});
-
-test("creates or updates a marked pull request audit comment", async () => {
-  const marker = pullRequestMarker("42", "SonarCloud");
-  assert.equal(marker, "<!-- ci-audit:42:SonarCloud -->");
-  const createdCalls = setFetch(({ url, options }) => {
-    if (options.method === "POST") {
-      assert.match(url.pathname, /\/issues\/73\/comments$/);
-      assert.match(JSON.parse(options.body).body, /Auditoría/);
-      return jsonResponse({ id: 1 }, 201);
-    }
-    return jsonResponse([]);
-  });
-  await upsertPullRequestComment("73", marker, "Auditoría", githubEnv());
-  assert.equal(createdCalls.length, 2);
-
-  const updatedCalls = setFetch(({ url, options }) => {
-    if (options.method === "PATCH") {
-      assert.match(url.pathname, /\/issues\/comments\/9$/);
-      assert.match(JSON.parse(options.body).body, /Actualizado/);
-      return jsonResponse({ id: 9 });
-    }
-    return jsonResponse([{ id: 9, body: `${marker}\nAnterior` }]);
-  });
-  await upsertPullRequestComment("73", marker, "Actualizado", githubEnv());
-  assert.equal(updatedCalls.length, 2);
-  await upsertPullRequestComment("", marker, "No PR", githubEnv());
-  await upsertPullRequestComment("73", marker, "Fork", githubEnv({ PR_COMMENT_DISABLED: "true" }));
-  assert.equal(updatedCalls.length, 2);
-
-  const paginatedCalls = setFetch(({ url, options }) => {
-    if (options.method === "PATCH") return jsonResponse({ id: 8 });
-    if (url.searchParams.get("page") === "1") {
-      return jsonResponse(Array.from({ length: 100 }, (_, index) => ({ id: index + 1, body: "other" })));
-    }
-    return jsonResponse([{ id: 8, body: `${marker}\nOld comment` }]);
-  });
-  await upsertPullRequestComment("73", marker, "Updated after pagination", githubEnv());
-  assert.equal(paginatedCalls.length, 3);
-  await assert.rejects(
-    upsertPullRequestComment("73", marker, "No repository", githubEnv({ GITHUB_REPOSITORY: "" })),
-    /GITHUB_REPOSITORY is unavailable/,
-  );
-});
-
 test("formats Jira and artifact evidence for stage comments and descriptions", () => {
   const env = {
     JIRA_JOB_NAME: "Pruebas unitarias",
@@ -293,42 +169,7 @@ test("formats Jira and artifact evidence for stage comments and descriptions", (
   assert.match(lines.join("\n"), /SCRUM-10/);
   assert.match(lines.join("\n"), /unit-test-reports, javascript-coverage/);
   assert.match(lines.join("\n"), /Ejecución reportada para auditoría/);
-  assert.match(
-    pullRequestStageComment(
-      "SCRUM-11",
-      "SCRUM-10",
-      "Exitoso",
-      "https://github.com/acme/repo/actions/runs/42",
-      env,
-    ),
-    /✅ Pruebas unitarias: Exitoso/,
-  );
-  assert.match(
-    pullRequestStageComment("", "", "Cancelado", "https://example.test/run", {}),
-    /⚪ Etapa: Cancelado/,
-  );
-  assert.match(
-    pullRequestStageComment("", "", "Fallido", "https://example.test/run", { GITHUB_JOB: "test" }),
-    /❌ test: Fallido/,
-  );
-  assert.match(pullRequestMarker("", ""), /unknown/);
   assert.match(subtaskResultLines("SCRUM-11", "", "Fallido", "https://example.test/run", { GITHUB_JOB: "build" })[0], /build/);
-});
-
-test("adds the Jira parent link to the PR audit comment", async () => {
-  let createdComment;
-  const calls = setFetch(({ url, options }) => {
-    if (options.method === "POST") {
-      createdComment = JSON.parse(options.body).body;
-      return jsonResponse({ id: 3 }, 201);
-    }
-    return jsonResponse([]);
-  });
-  await addParentIssuePullRequestComment("SCRUM-10", "73", githubEnv());
-  assert.match(createdComment, /\[SCRUM-10\]\(https:\/\/gianfrancocarrasco1901\.atlassian\.net\/browse\/SCRUM-10\)/);
-  assert.equal(calls.length, 2);
-  await addParentIssuePullRequestComment("SCRUM-10", "", githubEnv());
-  assert.equal(calls.length, 2);
 });
 
 test("writes GitHub outputs and fails explicitly when unavailable", () => {
@@ -369,7 +210,7 @@ test("creates a parent issue, transitions it, and records the output", async () 
     return jsonResponse({ fields: { status: { name: "To Do" } } });
   });
   await main("create-parent", jiraEnv({ GITHUB_OUTPUT: output }));
-  assert.equal(fs.readFileSync(output, "utf8"), "issue_key=SCRUM-10\npr_number=\n");
+  assert.equal(fs.readFileSync(output, "utf8"), "issue_key=SCRUM-10\n");
   const createBody = JSON.parse(calls[0].options.body);
   assert.equal(createBody.fields.issuetype.name, "Tarea");
   assert.match(createBody.fields.summary, /CI #42/);
@@ -426,6 +267,7 @@ test("creates a subtask and rejects missing parent or subtask type", async () =>
   const createBody = JSON.parse(calls[2].options.body);
   assert.equal(createBody.fields.parent.key, "SCRUM-1");
   assert.equal(createBody.fields.issuetype.id, "5");
+  assert.match(createBody.fields.summary, /Padre: SCRUM-1/);
 });
 
 test("finishes subtasks with result comments and status transitions", async () => {
@@ -461,7 +303,7 @@ test("finishes subtasks with result comments and status transitions", async () =
   }
 });
 
-test("updates subtask descriptions and can report a stage without Jira", async () => {
+test("updates subtask descriptions and validates Jira configuration", async () => {
   const calls = setFetch(({ url, options }) => {
     if (url.pathname.endsWith("/issue/SCRUM-21") && !options.method) {
       return jsonResponse({
@@ -491,38 +333,6 @@ test("updates subtask descriptions and can report a stage without Jira", async (
   await updateSubtaskDescription("SCRUM-21", ["Resultado: Fallido"], config);
   assert.equal(nullDescriptionCalls.length, 2);
 
-  const env = jiraEnv({
-    GITHUB_TOKEN: "github-test-token",
-    GITHUB_API_URL: "https://api.github.test",
-    GITHUB_REPOSITORY: "acme/repo",
-    GITHUB_RUN_ID: "42",
-    JIRA_JOB_NAME: "Build",
-    PR_NUMBER: "73",
-    JOB_RESULT: "success",
-  });
-  const prCalls = setFetch(({ options }) => {
-    if (options.method === "POST") {
-      assert.match(JSON.parse(options.body).body, /(?:Build|build|Etapa): Exitoso/);
-      return jsonResponse({ id: 2 }, 201);
-    }
-    return jsonResponse([]);
-  });
-  await finishSubtask(null, env);
-  assert.equal(prCalls.length, 2);
-  await finishSubtask(null, { ...env, PR_COMMENT_DISABLED: "true" });
-  assert.equal(prCalls.length, 2);
-  await finishSubtask(null, {
-    ...env,
-    JIRA_JOB_NAME: "",
-    GITHUB_JOB: "build",
-  });
-  assert.equal(prCalls.length, 4);
-  await finishSubtask(null, {
-    ...env,
-    JIRA_JOB_NAME: "",
-    GITHUB_JOB: "",
-  });
-  assert.equal(prCalls.length, 6);
   await assert.rejects(finishSubtask(null, { JOB_RESULT: "" }), /JOB_RESULT is unavailable/);
   await assert.rejects(
     finishSubtask(null, { JIRA_ISSUE_KEY: "SCRUM-22", JOB_RESULT: "success" }),
@@ -556,58 +366,10 @@ test("finishes the parent based on failed or skipped jobs", async () => {
   }
 });
 
-test("publishes the final parent result on the related pull request", async () => {
-  let finalComment;
-  const calls = setFetch(({ url, options }) => {
-    if (url.origin === "https://gianfrancocarrasco1901.atlassian.net") {
-      if (url.pathname.endsWith("/comment")) return jsonResponse({ id: "jira-comment" }, 201);
-      return jsonResponse({ fields: { status: { name: "Finalizado" } } });
-    }
-    if (options.method === "POST") {
-      finalComment = JSON.parse(options.body).body;
-      return jsonResponse({ id: "pr-comment" }, 201);
-    }
-    return jsonResponse([]);
-  });
-  await main("finish-parent", {
-    ...jiraEnv({ JIRA_ISSUE_KEY: "SCRUM-30" }),
-    ...githubEnv({ PR_NUMBER: "73" }),
-    JOB_RESULTS: JSON.stringify({ build: { result: "success" } }),
-  });
-  assert.match(finalComment, /Resultado final del workflow: Exitoso/);
-  assert.match(finalComment, /build: success/);
-  assert.equal(calls.length, 4);
-
-  for (const [jobResults, expectedText] of [
-    ["{}", /Resultado final del workflow: Exitoso/],
-    [JSON.stringify({ build: { result: "failure" } }), /Resultado final del workflow: Fallido/],
-  ]) {
-    let summary;
-    const finalStatus = jobResults.includes("failure") ? "Fallido" : "Finalizado";
-    setFetch(({ url, options }) => {
-      if (url.origin === "https://gianfrancocarrasco1901.atlassian.net") {
-        if (url.pathname.endsWith("/comment")) return jsonResponse({ id: "jira-comment" }, 201);
-        return jsonResponse({ fields: { status: { name: finalStatus } } });
-      }
-      if (options.method === "POST") {
-        summary = JSON.parse(options.body).body;
-        return jsonResponse({ id: "pr-comment" }, 201);
-      }
-      return jsonResponse([]);
-    });
-    await main("finish-parent", {
-      ...jiraEnv({ JIRA_ISSUE_KEY: "SCRUM-30" }),
-      ...githubEnv({ PR_NUMBER: "73" }),
-      JOB_RESULTS: jobResults,
-    });
-    assert.match(summary, expectedText);
-  }
-});
-
 test("skips Jira for forked PRs and rejects unknown commands", async () => {
   const output = path.join(tempDir, "disabled-output.txt");
   await main("create-parent", { JIRA_TRACKING_DISABLED: "true", GITHUB_OUTPUT: output });
-  assert.equal(fs.readFileSync(output, "utf8"), "issue_key=\npr_number=\n");
+  assert.equal(fs.readFileSync(output, "utf8"), "issue_key=\n");
   await assert.rejects(main("unknown"), /Unsupported Jira command/);
 });
 

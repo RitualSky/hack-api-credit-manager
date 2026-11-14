@@ -35,11 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
-      pull-requests: read
     outputs:
       issue_key: ${{ steps.create.outputs.issue_key }}
-      pr_number: ${{ steps.create.outputs.pr_number }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +47,6 @@ jobs:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_TRACKING_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && secrets.JIRA_EMAIL == '' && secrets.JIRA_API_TOKEN == '' }}
-          GITHUB_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js create-parent
 
@@ -60,7 +56,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,9 +92,6 @@ jobs:
           JIRA_JOB_NAME: Build
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
           EVIDENCE_ARTIFACTS: app-package
         run: node .github/scripts/jira.js finish-subtask
 
@@ -109,7 +101,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -166,9 +157,6 @@ jobs:
           JIRA_JOB_NAME: Pruebas unitarias
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
           EVIDENCE_ARTIFACTS: javascript-coverage, unit-test-reports
         run: node .github/scripts/jira.js finish-subtask
 
@@ -178,7 +166,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -241,9 +228,6 @@ jobs:
           JIRA_JOB_NAME: SonarCloud
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   security-tool:
@@ -252,7 +236,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -280,9 +263,6 @@ jobs:
           STAGE_NOTE: Este job es un placeholder; el escaneo SCA se ejecuta en Snyk Security Check y no hay SAST configurado.
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   snyk-sca:
@@ -292,7 +272,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -345,9 +324,6 @@ jobs:
           JIRA_JOB_NAME: Snyk Security Check
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
           EVIDENCE_ARTIFACTS: snyk-sca-reports
         run: node .github/scripts/jira.js finish-subtask
 
@@ -359,7 +335,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -391,9 +366,6 @@ jobs:
           STAGE_NOTE: La acción de escaneo está comentada; no se generó reporte ZAP.
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   dast:
@@ -403,7 +375,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -436,9 +407,6 @@ jobs:
           STAGE_NOTE: La acción full-scan está comentada; no se generó reporte DAST.
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   deploy-cert:
@@ -448,7 +416,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     environment:
       name: certification
       url: ${{ vars.CERT_URL }}
@@ -486,9 +453,6 @@ jobs:
           STAGE_NOTE: El paso azure/webapps-deploy está comentado; no se ejecutó el despliegue.
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   functional-tests:
@@ -497,7 +461,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -534,9 +497,6 @@ jobs:
           JIRA_JOB_NAME: Pruebas funcionales Karate
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
           EVIDENCE_ARTIFACTS: karate-reports
         run: node .github/scripts/jira.js finish-subtask
 
@@ -547,7 +507,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -582,9 +541,6 @@ jobs:
           JIRA_JOB_NAME: Reporte funcional
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
           EVIDENCE_ARTIFACTS: karate-reports
         run: node .github/scripts/jira.js finish-subtask
 
@@ -594,7 +550,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -647,9 +602,6 @@ jobs:
           JIRA_JOB_NAME: Pruebas de performance k6
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
           EVIDENCE_ARTIFACTS: k6-summary
         run: node .github/scripts/jira.js finish-subtask
 
@@ -661,7 +613,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     environment: production-scheduled
     steps:
       - uses: actions/checkout@v4
@@ -698,9 +649,6 @@ jobs:
           JIRA_JOB_NAME: Pase automatizado calendarizado
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   release-approval:
@@ -710,7 +658,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     # Configurar required reviewers en este environment
     environment: production-approval
     steps:
@@ -738,9 +685,6 @@ jobs:
           JIRA_JOB_NAME: Aprobación humana para producción
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   deploy-prod:
@@ -752,7 +696,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     environment:
       name: production
       url: ${{ vars.PROD_URL }}
@@ -790,9 +733,6 @@ jobs:
           STAGE_NOTE: El paso azure/webapps-deploy está comentado; no se ejecutó el despliegue.
           JOB_RESULT: ${{ job.status }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-subtask
 
   jira-finalize:
@@ -817,7 +757,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -829,7 +768,4 @@ jobs:
           JIRA_ISSUE_KEY: ${{ needs.jira-init.outputs.issue_key }}
           JOB_RESULTS: ${{ toJSON(needs) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PR_NUMBER: ${{ needs.jira-init.outputs.pr_number }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: node .github/scripts/jira.js finish-parent

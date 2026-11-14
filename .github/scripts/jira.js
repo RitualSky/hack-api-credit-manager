@@ -106,123 +106,8 @@ function writeOutput(name, value, outputPath = process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(outputPath, `${name}=${value}\n`);
 }
 
-function getPullRequestNumberFromEvent(env) {
-  if (env.PR_NUMBER) return String(env.PR_NUMBER);
-  if (env.GITHUB_EVENT_NAME !== "pull_request" || !env.GITHUB_EVENT_PATH) return "";
-
-  const event = JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
-  const number = event.pull_request && event.pull_request.number;
-  return number ? String(number) : "";
-}
-
-function githubApiUrl(path, env) {
-  const apiBaseUrl = new URL(env.GITHUB_API_URL || "https://api.github.com");
-  const route = path.startsWith("/") ? path.slice(1) : path;
-  const requestUrl = new URL(route, `${apiBaseUrl.href.replace(/\/+$/, "")}/`);
-  if (requestUrl.origin !== apiBaseUrl.origin) {
-    throw new Error("GitHub API URL is outside the configured API origin");
-  }
-  return requestUrl;
-}
-
-async function github(path, options = {}, env = process.env) {
-  if (!env.GITHUB_TOKEN) throw new Error("GITHUB_TOKEN is unavailable");
-  const requestUrl = githubApiUrl(path, env);
-  const response = await fetch(requestUrl, {
-    ...options,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    redirect: "error",
-    headers: {
-      ...options.headers,
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "Content-Type": "application/json",
-    },
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    const method = options.method || "GET";
-    throw new Error(
-      `GitHub API ${method} ${requestUrl.pathname} failed (${response.status}): ${body}`,
-    );
-  }
-  return body ? JSON.parse(body) : {};
-}
-
-async function resolvePullRequestNumber(env = process.env) {
-  const eventPullNumber = getPullRequestNumberFromEvent(env);
-  if (eventPullNumber || !env.GITHUB_REPOSITORY || !env.GITHUB_SHA || !env.GITHUB_TOKEN) {
-    return eventPullNumber;
-  }
-
-  const repository = encodeURIComponent(env.GITHUB_REPOSITORY).replace("%2F", "/");
-  const commit = encodeURIComponent(env.GITHUB_SHA);
-  const pullRequests = await github(
-    `/repos/${repository}/commits/${commit}/pulls?per_page=100`,
-    {},
-    env,
-  );
-  const associated = pullRequests.find((pullRequest) => pullRequest.merged_at) || pullRequests[0];
-  return associated ? String(associated.number) : "";
-}
-
-function pullRequestMarker(runId, stage) {
-  const safeStage = String(stage).replaceAll(/[^a-zA-Z0-9_-]/g, "-");
-  return `<!-- ci-audit:${runId || "unknown"}:${safeStage} -->`;
-}
-
-async function upsertPullRequestComment(prNumber, marker, body, env = process.env) {
-  if (!prNumber || env.PR_COMMENT_DISABLED === "true") return;
-  const repository = env.GITHUB_REPOSITORY;
-  if (!repository) throw new Error("GITHUB_REPOSITORY is unavailable");
-
-  const encodedRepository = encodeURIComponent(repository).replace("%2F", "/");
-  const commentsPath = `/repos/${encodedRepository}/issues/${encodeURIComponent(prNumber)}/comments`;
-  let page = 1;
-  let existing;
-  while (page <= 100) {
-    const comments = await github(`${commentsPath}?per_page=100&page=${page}`, {}, env);
-    existing = comments.find((comment) => comment.body && comment.body.includes(marker));
-    if (existing || comments.length < 100) break;
-    page += 1;
-  }
-
-  const commentBody = `${marker}\n${body}`;
-  if (existing) {
-    await github(
-      `/repos/${encodedRepository}/issues/comments/${encodeURIComponent(existing.id)}`,
-      { method: "PATCH", body: JSON.stringify({ body: commentBody }) },
-      env,
-    );
-    return;
-  }
-
-  await github(
-    commentsPath,
-    { method: "POST", body: JSON.stringify({ body: commentBody }) },
-    env,
-  );
-}
-
 function jiraIssueUrl(issueKey) {
   return `${JIRA_BROWSE_BASE_URL}${encodeURIComponent(issueKey)}`;
-}
-
-async function addParentIssuePullRequestComment(issueKey, prNumber, env) {
-  if (!prNumber) return;
-  const runUrl = env.RUN_URL;
-  const body = [
-    "## Seguimiento de CI/CD",
-    `Issue padre de Jira: [${issueKey}](${jiraIssueUrl(issueKey)})`,
-    `Ejecución: [ver logs y artefactos](${runUrl})`,
-  ].join("\n\n");
-  await upsertPullRequestComment(
-    prNumber,
-    pullRequestMarker(env.GITHUB_RUN_ID, "jira-parent"),
-    body,
-    env,
-  );
 }
 
 async function transition(issueKey, targetStatus, config) {
@@ -258,7 +143,6 @@ async function createParent(config, env = process.env) {
   const branch = env.GITHUB_REF_NAME || "unknown";
   const runId = env.GITHUB_RUN_ID || "unknown";
   const workflow = env.GITHUB_WORKFLOW || "pipeline";
-  const pullRequestNumber = await resolvePullRequestNumber(env);
   const issue = await jira(
     "/issue",
     {
@@ -279,9 +163,7 @@ async function createParent(config, env = process.env) {
     config,
   );
   writeOutput("issue_key", issue.key, env.GITHUB_OUTPUT);
-  writeOutput("pr_number", pullRequestNumber, env.GITHUB_OUTPUT);
   await transition(issue.key, "En curso", config);
-  await addParentIssuePullRequestComment(issue.key, pullRequestNumber, env);
   console.log(`Created Jira parent issue ${sanitizeForLog(issue.key)}`);
 }
 
@@ -310,7 +192,7 @@ async function startSubtask(config, env = process.env) {
           project: { key: config.projectKey },
           parent: { key: parentKey },
           issuetype: { id: subtaskType.id },
-          summary: `${jobName}: ${workflow}`,
+          summary: `${jobName}: ${workflow} (Padre: ${parentKey})`,
           description: adf([
             `Job: ${jobName}`,
             `Workflow run: ${runUrl}`,
@@ -394,25 +276,6 @@ async function updateSubtaskDescription(issueKey, lines, config) {
   );
 }
 
-function pullRequestStageComment(issueKey, parentKey, result, runUrl, env) {
-  const jobName = env.JIRA_JOB_NAME || env.GITHUB_JOB || "Etapa";
-  const artifacts = artifactNames(env);
-  const stageNote = env.STAGE_NOTE ? [`Nota: ${env.STAGE_NOTE}`] : [];
-  const statusIcon = result === "Exitoso" ? "✅" : result === "Cancelado" ? "⚪" : "❌";
-  return [
-    `## ${statusIcon} ${jobName}: ${result}`,
-    ...(parentKey
-      ? [`Issue padre Jira: [${parentKey}](${jiraIssueUrl(parentKey)})`]
-      : []),
-    ...(issueKey
-      ? [`Subtarea Jira: [${issueKey}](${jiraIssueUrl(issueKey)})`]
-      : []),
-    `Evidencia: [ver logs y artefactos de esta ejecución](${runUrl})`,
-    ...(artifacts.length ? [`Artefactos: ${artifacts.join(", ")}`] : []),
-    ...stageNote,
-  ].join("\n\n");
-}
-
 async function finishSubtask(config, env = process.env) {
   const issueKey = env.JIRA_ISSUE_KEY;
   const result = env.JOB_RESULT;
@@ -436,22 +299,6 @@ async function finishSubtask(config, env = process.env) {
     await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
   }
 
-  const prNumber = env.PR_NUMBER || (await resolvePullRequestNumber(env));
-  if (prNumber && env.PR_COMMENT_DISABLED !== "true") {
-    const jobName = env.JIRA_JOB_NAME || env.GITHUB_JOB || "Etapa";
-    await upsertPullRequestComment(
-      prNumber,
-      pullRequestMarker(env.GITHUB_RUN_ID, jobName),
-      pullRequestStageComment(
-        issueKey,
-        env.JIRA_PARENT_KEY,
-        label,
-        env.RUN_URL,
-        env,
-      ),
-      env,
-    );
-  }
 }
 
 async function finishParent(config, env = process.env) {
@@ -469,31 +316,11 @@ async function finishParent(config, env = process.env) {
   await addResultComment(issueKey, label, env.RUN_URL, details, config);
   await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
 
-  const prNumber = env.PR_NUMBER || (await resolvePullRequestNumber(env));
-  if (prNumber && env.PR_COMMENT_DISABLED !== "true") {
-    const jobLines = Object.entries(results).map(
-      ([name, job]) => `- ${name}: ${job.result}`,
-    );
-    const body = [
-      `## ${succeeded ? "✅" : "❌"} Resultado final del workflow: ${label}`,
-      `Issue padre Jira: [${issueKey}](${jiraIssueUrl(issueKey)})`,
-      ...(jobLines.length ? [`### Etapas\n${jobLines.join("\n")}`] : []),
-      `Evidencia: [ver ejecución, logs y artefactos](${env.RUN_URL})`,
-    ].join("\n\n");
-    await upsertPullRequestComment(
-      prNumber,
-      pullRequestMarker(env.GITHUB_RUN_ID, "jira-final"),
-      body,
-      env,
-    );
-  }
 }
 
 async function main(command = process.argv[2], env = process.env) {
   if (command === "create-parent" && env.JIRA_TRACKING_DISABLED === "true") {
     writeOutput("issue_key", "", env.GITHUB_OUTPUT);
-    const pullRequestNumber = await resolvePullRequestNumber(env);
-    writeOutput("pr_number", pullRequestNumber, env.GITHUB_OUTPUT);
     console.log("Jira tracking is unavailable for this forked pull request; continuing without Jira.");
     return;
   }
@@ -529,25 +356,18 @@ if (require.main === module) {
 
 module.exports = {
   adf,
-  addParentIssuePullRequestComment,
   artifactNames,
   buildApiUrl,
   createParent,
   finishParent,
   finishSubtask,
-  github,
-  githubApiUrl,
   jira,
   main,
-  pullRequestMarker,
-  pullRequestStageComment,
-  resolvePullRequestNumber,
   requireConfig,
   sanitizeForLog,
   startSubtask,
   subtaskResultLines,
   transition,
   updateSubtaskDescription,
-  upsertPullRequestComment,
   writeOutput,
 };
