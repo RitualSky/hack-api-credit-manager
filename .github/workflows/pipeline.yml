@@ -293,7 +293,7 @@ jobs:
       #     allow_issue_writing: false
       #     fail_action: false
       #     artifact_name: zap-full-scan-report
-      # - name: Registrar resultado en Jira
+      - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
