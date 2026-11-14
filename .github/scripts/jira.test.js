@@ -6,13 +6,17 @@ const path = require("node:path");
 const { after, afterEach, test } = require("node:test");
 const {
   adf,
+  artifactNames,
   buildApiUrl,
+  finishSubtask,
   jira,
   main,
   requireConfig,
   sanitizeForLog,
   startSubtask,
+  subtaskResultLines,
   transition,
+  updateSubtaskDescription,
   writeOutput,
 } = require("./jira");
 
@@ -147,6 +151,27 @@ test("creates linked ADF paragraphs with or without URL prefixes", () => {
   assert.equal(document.content[4].content[0].marks[0].attrs.href, "https://first.test then http://second.test");
 });
 
+test("formats Jira and artifact evidence for stage comments and descriptions", () => {
+  const env = {
+    JIRA_JOB_NAME: "Pruebas unitarias",
+    EVIDENCE_ARTIFACTS: "unit-test-reports, javascript-coverage",
+    STAGE_NOTE: "Ejecución reportada para auditoría",
+  };
+  assert.deepEqual(artifactNames(env), ["unit-test-reports", "javascript-coverage"]);
+  assert.deepEqual(artifactNames({}), []);
+  const lines = subtaskResultLines(
+    "SCRUM-11",
+    "SCRUM-10",
+    "Exitoso",
+    "https://github.com/acme/repo/actions/runs/42",
+    env,
+  );
+  assert.match(lines.join("\n"), /SCRUM-10/);
+  assert.match(lines.join("\n"), /unit-test-reports, javascript-coverage/);
+  assert.match(lines.join("\n"), /Ejecución reportada para auditoría/);
+  assert.match(subtaskResultLines("SCRUM-11", "", "Fallido", "https://example.test/run", { GITHUB_JOB: "build" })[0], /build/);
+});
+
 test("writes GitHub outputs and fails explicitly when unavailable", () => {
   const output = path.join(tempDir, "output.txt");
   writeOutput("issue_key", "SCRUM-1", output);
@@ -242,6 +267,7 @@ test("creates a subtask and rejects missing parent or subtask type", async () =>
   const createBody = JSON.parse(calls[2].options.body);
   assert.equal(createBody.fields.parent.key, "SCRUM-1");
   assert.equal(createBody.fields.issuetype.id, "5");
+  assert.match(createBody.fields.summary, /Padre: SCRUM-1/);
 });
 
 test("finishes subtasks with result comments and status transitions", async () => {
@@ -252,6 +278,15 @@ test("finishes subtasks with result comments and status transitions", async () =
   ]) {
     let comment;
     const calls = setFetch(({ url, options }) => {
+      if (url.pathname.endsWith("/issue/SCRUM-20") && options.method === "GET") {
+        return jsonResponse({
+          fields: { description: { type: "doc", version: 1, content: [] } },
+        });
+      }
+      if (url.pathname.endsWith("/issue/SCRUM-20") && options.method === "PUT") {
+        assert.match(JSON.stringify(JSON.parse(options.body)), new RegExp(expectedLabel));
+        return new Response(null, { status: 204 });
+      }
       if (url.pathname.endsWith("/comment")) {
         comment = JSON.parse(options.body);
         return jsonResponse({ id: "comment-1" }, 201);
@@ -264,8 +299,46 @@ test("finishes subtasks with result comments and status transitions", async () =
     }));
     assert.match(JSON.stringify(comment), new RegExp(expectedLabel));
     assert.ok(JSON.stringify(comment).includes("https://github.com/acme/repo/actions/runs/42"));
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 4);
   }
+});
+
+test("updates subtask descriptions and validates Jira configuration", async () => {
+  const calls = setFetch(({ url, options }) => {
+    if (url.pathname.endsWith("/issue/SCRUM-21") && !options.method) {
+      return jsonResponse({
+        fields: {
+          description: {
+            type: "doc",
+            version: 1,
+            content: [{ type: "paragraph", content: [] }],
+          },
+        },
+      });
+    }
+    if (url.pathname.endsWith("/issue/SCRUM-21") && options.method === "PUT") {
+      const description = JSON.parse(options.body).fields.description;
+      assert.equal(description.content.length, 2);
+      return new Response(null, { status: 204 });
+    }
+    return jsonResponse({});
+  });
+  await updateSubtaskDescription("SCRUM-21", ["Resultado: Exitoso"], config);
+  assert.equal(calls.length, 2);
+
+  const nullDescriptionCalls = setFetch(({ options }) => {
+    if (!options.method) return jsonResponse({ fields: { description: null } });
+    return new Response(null, { status: 204 });
+  });
+  await updateSubtaskDescription("SCRUM-21", ["Resultado: Fallido"], config);
+  assert.equal(nullDescriptionCalls.length, 2);
+
+  await assert.rejects(finishSubtask(null, { JOB_RESULT: "" }), /JOB_RESULT is unavailable/);
+  await assert.rejects(
+    finishSubtask(null, { JIRA_ISSUE_KEY: "SCRUM-22", JOB_RESULT: "success" }),
+    /Jira configuration is required/,
+  );
+  await main("finish-subtask", { JOB_RESULT: "success" });
 });
 
 test("finishes the parent based on failed or skipped jobs", async () => {

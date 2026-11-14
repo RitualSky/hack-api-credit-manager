@@ -25,12 +25,21 @@ El análisis mantiene la validación del quality gate.
 `target/jacoco-report/jacoco.xml`; el POM configura esta ruta para que SonarCloud
 importe el informe tanto en pull requests como en análisis de `master`.
 
+## Snyk SCA
+El job `Snyk Security Check` analiza las dependencias Maven y npm, incluidas las
+de desarrollo, y bloquea el avance si detecta vulnerabilidades altas o críticas
+o si no puede completar el análisis. Configura el secreto de Actions `SNYK_TOKEN`
+con un token de tu cuenta Snyk. El reporte JSON se publica en el artefacto
+`snyk-sca-reports` de la ejecución. Los PRs desde forks omiten este job porque
+GitHub no expone secretos a esos eventos.
+
 ## Jira en GitHub Actions
 Cada ejecución crea un issue `Tarea` en el proyecto `SCRUM`. Cada job ejecutado
 se registra como subtarea: pasa a `En curso` al iniciar y a `Finalizado` o
-`Fallido` al terminar. El resultado y el enlace a los logs quedan en un
-comentario de la subtarea; el issue padre se cierra según el resultado global
-del workflow.
+`Fallido` al terminar. La descripción y un comentario de cada subtarea incluyen
+el resultado y el enlace a los logs y artefactos. En los PRs, un comentario
+vincula el issue padre y registra el resultado de cada etapa; al final agrega un
+resumen del workflow.
 
 Configura en **Settings → Secrets and variables → Actions** los secretos
 `JIRA_EMAIL` (correo de la cuenta Jira) y `JIRA_API_TOKEN`. La cuenta necesita

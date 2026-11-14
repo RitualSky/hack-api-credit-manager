@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const REQUEST_TIMEOUT_MS = 30_000;
 const JIRA_API_BASE_URL =
   "https://gianfrancocarrasco1901.atlassian.net/rest/api/3/";
+const JIRA_BROWSE_BASE_URL = "https://gianfrancocarrasco1901.atlassian.net/browse/";
 
 function requireConfig(env = process.env) {
   const missing = [];
@@ -105,6 +106,10 @@ function writeOutput(name, value, outputPath = process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(outputPath, `${name}=${value}\n`);
 }
 
+function jiraIssueUrl(issueKey) {
+  return `${JIRA_BROWSE_BASE_URL}${encodeURIComponent(issueKey)}`;
+}
+
 async function transition(issueKey, targetStatus, config) {
   const encodedIssueKey = encodeURIComponent(issueKey);
   const issue = await jira(`/issue/${encodedIssueKey}?fields=status`, {}, config);
@@ -187,7 +192,7 @@ async function startSubtask(config, env = process.env) {
           project: { key: config.projectKey },
           parent: { key: parentKey },
           issuetype: { id: subtaskType.id },
-          summary: `${jobName}: ${workflow}`,
+          summary: `${jobName}: ${workflow} (Padre: ${parentKey})`,
           description: adf([
             `Job: ${jobName}`,
             `Workflow run: ${runUrl}`,
@@ -220,16 +225,80 @@ async function addResultComment(issueKey, result, runUrl, details, config) {
   );
 }
 
+function artifactNames(env) {
+  return (env.EVIDENCE_ARTIFACTS || "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+function subtaskResultLines(issueKey, parentKey, result, runUrl, env) {
+  const jobName = env.JIRA_JOB_NAME || env.GITHUB_JOB || "Etapa";
+  const parentLine = parentKey
+    ? `Issue padre: ${parentKey}: ${jiraIssueUrl(parentKey)}`
+    : "";
+  const artifacts = artifactNames(env);
+  const stageNote = env.STAGE_NOTE ? [`Nota: ${env.STAGE_NOTE}`] : [];
+  return [
+    `Etapa: ${jobName}`,
+    `Resultado: ${result}`,
+    ...(parentLine ? [parentLine] : []),
+    `Subtarea: ${issueKey}: ${jiraIssueUrl(issueKey)}`,
+    `Evidencia (logs y artefactos): ${runUrl}`,
+    ...(artifacts.length ? [`Artefactos: ${artifacts.join(", ")}`] : []),
+    ...stageNote,
+  ];
+}
+
+async function updateSubtaskDescription(issueKey, lines, config) {
+  const encodedIssueKey = encodeURIComponent(issueKey);
+  const issue = await jira(`/issue/${encodedIssueKey}?fields=description`, {}, config);
+  const description = issue.fields.description;
+  const existingContent =
+    description && description.type === "doc" && Array.isArray(description.content)
+      ? description.content
+      : [];
+  await jira(
+    `/issue/${encodedIssueKey}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        fields: {
+          description: {
+            type: "doc",
+            version: 1,
+            content: [...existingContent, ...adf(lines).content],
+          },
+        },
+      }),
+    },
+    config,
+  );
+}
+
 async function finishSubtask(config, env = process.env) {
   const issueKey = env.JIRA_ISSUE_KEY;
   const result = env.JOB_RESULT;
+  if (!result) throw new Error("JOB_RESULT is unavailable");
   const succeeded = result === "success";
   let label = "Fallido";
   if (succeeded) label = "Exitoso";
   else if (result === "cancelled") label = "Cancelado";
 
-  await addResultComment(issueKey, label, env.RUN_URL, [], config);
-  await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
+  if (issueKey) {
+    if (!config) throw new Error("Jira configuration is required to finish a subtask");
+    const lines = subtaskResultLines(
+      issueKey,
+      env.JIRA_PARENT_KEY,
+      label,
+      env.RUN_URL,
+      env,
+    );
+    await updateSubtaskDescription(issueKey, lines, config);
+    await addResultComment(issueKey, label, env.RUN_URL, lines, config);
+    await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
+  }
+
 }
 
 async function finishParent(config, env = process.env) {
@@ -246,6 +315,7 @@ async function finishParent(config, env = process.env) {
 
   await addResultComment(issueKey, label, env.RUN_URL, details, config);
   await transition(issueKey, succeeded ? "Finalizado" : "Fallido", config);
+
 }
 
 async function main(command = process.argv[2], env = process.env) {
@@ -265,7 +335,7 @@ async function main(command = process.argv[2], env = process.env) {
     return;
   }
   if (command === "finish-subtask") {
-    const config = requireConfig(env);
+    const config = env.JIRA_ISSUE_KEY ? requireConfig(env) : null;
     await finishSubtask(config, env);
     return;
   }
@@ -286,6 +356,7 @@ if (require.main === module) {
 
 module.exports = {
   adf,
+  artifactNames,
   buildApiUrl,
   createParent,
   finishParent,
@@ -295,6 +366,8 @@ module.exports = {
   requireConfig,
   sanitizeForLog,
   startSubtask,
+  subtaskResultLines,
   transition,
+  updateSubtaskDescription,
   writeOutput,
 };
