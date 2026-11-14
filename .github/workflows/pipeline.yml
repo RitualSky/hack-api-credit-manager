@@ -169,34 +169,34 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
           cache: maven
-      # - name: Análisis SonarCloud
-      #   id: sonar
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || 'ritualsky' }}
-      #     SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || 'RitualSky_hack-api-credit-manager' }}
-      #   run: >
-      #     mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
-      #     -Dsonar.host.url=https://sonarcloud.io
-      #     -Dsonar.organization="$SONAR_ORGANIZATION"
-      #     -Dsonar.projectKey="$SONAR_PROJECT_KEY"
-      #     -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
-      #     -Dsonar.exclusions="**/*.test.js"
-      #     -Dsonar.coverage.exclusions="**/*.test.js"
-      #     -Dsonar.qualitygate.wait=true
-      # - name: Detalle de condiciones fallidas del Quality Gate
-      #   if: failure() && steps.sonar.outcome == 'failure'
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || 'RitualSky_hack-api-credit-manager' }}
-      #     SONAR_BRANCH: ${{ github.event_name == 'pull_request' && '' || github.ref_name }}
-      #     SONAR_PR: ${{ github.event_name == 'pull_request' && github.event.number || '' }}
-      #   run: |
-      #     args=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
-      #     [ -n "$SONAR_BRANCH" ] && args+=(--data-urlencode "branch=$SONAR_BRANCH")
-      #     [ -n "$SONAR_PR" ] && args+=(--data-urlencode "pullRequest=$SONAR_PR")
-      #     curl -sS -G -u "$SONAR_TOKEN:" "${args[@]}" https://sonarcloud.io/api/qualitygates/project_status \
-      #       | jq -r '.projectStatus | "Quality Gate: \(.status)", (.conditions[]? | select(.status != "OK") | "- \(.metricKey): \(.status) (valor=\(.actualValue // "sin datos"), umbral \(.comparator) \(.errorThreshold))")'
+      - name: Análisis SonarCloud
+        id: sonar
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || 'ritualsky' }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || 'RitualSky_hack-api-credit-manager' }}
+        run: >
+          mvn -B verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.organization="$SONAR_ORGANIZATION"
+          -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+          -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+          -Dsonar.exclusions="**/*.test.js"
+          -Dsonar.coverage.exclusions="**/*.test.js"
+          -Dsonar.qualitygate.wait=true
+      - name: Detalle de condiciones fallidas del Quality Gate
+        if: failure() && steps.sonar.outcome == 'failure'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || 'RitualSky_hack-api-credit-manager' }}
+          SONAR_BRANCH: ${{ github.event_name == 'pull_request' && '' || github.ref_name }}
+          SONAR_PR: ${{ github.event_name == 'pull_request' && github.event.number || '' }}
+        run: |
+          args=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
+          [ -n "$SONAR_BRANCH" ] && args+=(--data-urlencode "branch=$SONAR_BRANCH")
+          [ -n "$SONAR_PR" ] && args+=(--data-urlencode "pullRequest=$SONAR_PR")
+          curl -sS -G -u "$SONAR_TOKEN:" "${args[@]}" https://sonarcloud.io/api/qualitygates/project_status \
+            | jq -r '.projectStatus | "Quality Gate: \(.status)", (.conditions[]? | select(.status != "OK") | "- \(.metricKey): \(.status) (valor=\(.actualValue // "sin datos"), umbral \(.comparator) \(.errorThreshold))")'
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
@@ -253,12 +253,12 @@ jobs:
           JIRA_JOB_NAME: OWASP ZAP baseline
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
-      # - uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
-      #   with:
-      #     target: ${{ env.CERT_URL }}
-      #     allow_issue_writing: false
-      #     fail_action: false
-      #     artifact_name: zap-baseline-report
+      - uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
+        with:
+          target: ${{ env.CERT_URL }}
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: zap-baseline-report
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
@@ -286,13 +286,13 @@ jobs:
           JIRA_JOB_NAME: DAST
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js start-subtask
-      # Solo contra el ambiente de certificación autorizado (CERT_URL)
-      # - uses: zaproxy/action-full-scan@75ee1686750ab1511a73b26b77a2aedd295053ed # v0.12.0
-      #   with:
-      #     target: ${{ env.CERT_URL }}
-      #     allow_issue_writing: false
-      #     fail_action: false
-      #     artifact_name: zap-full-scan-report
+      Solo contra el ambiente de certificación autorizado (CERT_URL)
+      - uses: zaproxy/action-full-scan@75ee1686750ab1511a73b26b77a2aedd295053ed # v0.12.0
+        with:
+          target: ${{ env.CERT_URL }}
+          allow_issue_writing: false
+          fail_action: false
+          artifact_name: zap-full-scan-report
       - name: Registrar resultado en Jira
         if: always() && steps.jira_subtask.outputs.issue_key != ''
         env:
