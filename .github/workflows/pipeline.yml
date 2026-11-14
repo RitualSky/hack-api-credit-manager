@@ -50,7 +50,6 @@ jobs:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_TRACKING_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && secrets.JIRA_EMAIL == '' && secrets.JIRA_API_TOKEN == '' }}
-          PR_COMMENT_DISABLED: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: node .github/scripts/jira.js create-parent
